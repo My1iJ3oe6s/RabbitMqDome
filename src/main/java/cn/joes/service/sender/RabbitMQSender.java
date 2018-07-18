@@ -37,7 +37,7 @@ public class RabbitMQSender {
         System.out.println("开始发送消息....");
 
         AMQP.BasicProperties persistentTextPlain = com.rabbitmq.client.MessageProperties.PERSISTENT_TEXT_PLAIN;
-        System.out.println("success:");
+
         template.convertAndSend("direct", routingkey, "send message by exchange and routingkey..");
 
        /* System.out.println("error:rountingkey");

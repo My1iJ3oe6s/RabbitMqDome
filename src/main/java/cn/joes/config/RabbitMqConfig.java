@@ -1,19 +1,31 @@
 package cn.joes.config;
 
+import com.rabbitmq.client.Channel;
 import org.springframework.amqp.core.*;
+import org.springframework.amqp.rabbit.annotation.RabbitListener;
+import org.springframework.amqp.rabbit.config.SimpleRabbitListenerContainerFactory;
 import org.springframework.amqp.rabbit.connection.CachingConnectionFactory;
 import org.springframework.amqp.rabbit.connection.ConnectionFactory;
+import org.springframework.amqp.rabbit.core.ChannelAwareMessageListener;
 import org.springframework.amqp.rabbit.core.RabbitAdmin;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
+import org.springframework.amqp.rabbit.listener.MessageListenerContainer;
+import org.springframework.amqp.rabbit.listener.RabbitListenerContainerFactory;
+import org.springframework.amqp.rabbit.listener.RabbitListenerEndpoint;
+import org.springframework.amqp.rabbit.listener.SimpleMessageListenerContainer;
 import org.springframework.amqp.rabbit.support.CorrelationData;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.beans.factory.config.ConfigurableBeanFactory;
+import org.springframework.boot.autoconfigure.amqp.RabbitProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.PropertySource;
 import org.springframework.context.annotation.Scope;
 
 /**
+ *
+ * RabbitProperties config = new RabbitProperties(); rabbitmq的配置参数实体类
+ *
  * 如果消息没有到exchange,则confirm回调,ack=false
  * 如果消息到达exchange,则confirm回调,ack=true
  * exchange到queue成功,则不回调return
@@ -61,6 +73,9 @@ public class RabbitMqConfig {
         connectionFactory.setPublisherConfirms(true);
         /**消息回调*/
         connectionFactory.setPublisherReturns(true);
+        /**消费者的ack方式为手动*/
+
+
         return connectionFactory;
     }
 
@@ -114,5 +129,59 @@ public class RabbitMqConfig {
 
         return template;
     }
+
+    /**
+     * 消费者的工厂类
+     *
+     * @return
+     */
+    @Bean(value = "myRabbitListenerContainerFactory")
+    public RabbitListenerContainerFactory<?> rabbitListenerContainerFactory() {
+        SimpleRabbitListenerContainerFactory factory = new SimpleRabbitListenerContainerFactory();
+        factory.setConnectionFactory(connectionFactory());
+        /**开启手动 ack */
+        factory.setAcknowledgeMode(AcknowledgeMode.MANUAL);
+        RabbitListenerEndpoint endpoint = new RabbitListenerEndpoint() {
+            @Override
+            public String getId() {
+                return "id";
+            }
+
+            @Override
+            public String getGroup() {
+                return "group";
+            }
+
+            @Override
+            public void setupListenerContainer(MessageListenerContainer messageListenerContainer) {
+                messageListenerContainer.setupMessageListener(new ChannelAwareMessageListener() {
+                    @Override
+                    public void onMessage(Message message, Channel channel) throws Exception {
+                        System.out.println("接收到的消息 message : " + message);
+                        channel.basicReject(message.getMessageProperties().getDeliveryTag(), false);
+                        System.out.println("拒绝消息");
+                    }
+                });
+            }
+        };
+        factory.createListenerContainer(endpoint);
+        return factory;
+    }
+
+    /*@Bean(value = "myRabbitListenerContainer")
+    public SimpleMessageListenerContainer simpleMessageListenerContainer() {
+        SimpleMessageListenerContainer container = new SimpleMessageListenerContainer(connectionFactory());
+        container.setMessageListener(new ChannelAwareMessageListener() {
+            @Override
+            public void onMessage(Message message, Channel channel) throws Exception {
+                System.out.println("接收到的消息 message : " + message);
+                channel.basicReject(message.getMessageProperties().getDeliveryTag(), false);
+                System.out.println("拒绝消息");
+            }
+        });
+        return container;
+    }*/
+
+
 
 }
