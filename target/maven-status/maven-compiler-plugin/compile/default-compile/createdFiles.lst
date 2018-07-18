@@ -1,0 +1,7 @@
+cn\joes\controller\RabbitMQController.class
+cn\joes\service\receive\RabbitMQReceive.class
+cn\joes\Application.class
+cn\joes\config\RabbitMqConfig$1.class
+cn\joes\service\sender\RabbitMQSender.class
+cn\joes\config\RabbitMqConfig.class
+cn\joes\config\RabbitMqConfig$2.class
