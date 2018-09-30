@@ -26,10 +26,12 @@ import org.springframework.context.annotation.Scope;
  *
  * RabbitProperties config = new RabbitProperties(); rabbitmq的配置参数实体类
  *
- * 如果消息没有到exchange,则confirm回调,ack=false
- * 如果消息到达exchange,则confirm回调,ack=true
- * exchange到queue成功,则不回调return
- * exchange到queue失败,则回调return(需设置mandatory=true,否则不回回调,消息就丢了)
+ * 发送消息的确认机制原则::
+ *  (1)如果消息没有到exchange,则confirm回调,ack=false
+ *  (2)如果消息到达exchange,则confirm回调,ack=true
+ *  (3)exchange到queue成功,则不回调return
+ *  (4)exchange到queue失败,则回调return(需设置mandatory=true,否则不回回调,消息就丢了)
+ *
  * <p>
  * 测试的时候,原生的client,exchange错误的话,直接就报错了,是不会到confirmListener和returnListener的
  * <p>
@@ -53,10 +55,6 @@ public class RabbitMqConfig {
     @Value("${rabbitmq.password}")
     private String password;
 
-    private String queueName = "firstQueue";
-
-    private String routingkey = "first";
-
     /**
      * 通过 AbstractConnectionFactory 获取到内部 rabbitConnectionFactory
      *
@@ -75,7 +73,6 @@ public class RabbitMqConfig {
         connectionFactory.setPublisherReturns(true);
         /**消费者的ack方式为手动*/
 
-
         return connectionFactory;
     }
 
@@ -88,17 +85,89 @@ public class RabbitMqConfig {
     @Bean
     RabbitAdmin rabbitAdmin(ConnectionFactory connectionFactory) {
         RabbitAdmin admin = new RabbitAdmin(connectionFactory);
-        //创建队列和交换机
-        admin.declareQueue(new Queue(queueName));
-        Exchange exchange;
-        /*该交换机里面的三个参数分别为: 名字,持久化,是否自动删除*/
-        admin.declareExchange(new DirectExchange("direct", false, false));
-        Binding direct = BindingBuilder.bind(new Queue(queueName))
-                .to(new DirectExchange("direct", true, false)).with(routingkey);
+
+        //创建队列和交换机以及绑定
+
+        /**
+         * DIRECT
+         *
+         * direct : 通过路由键 消息将被投送到对应的队列(一对一)
+         */
+        admin.declareQueue(new Queue("Direct-Queue"));
+
+        //该交换机里面的三个参数分别为: 名字,持久化,是否自动删除
+        admin.declareExchange(new DirectExchange("Joe-Direct", false, false));
+
+        Binding direct = BindingBuilder.bind(new Queue("Direct-Queue"))
+                .to(new DirectExchange("Joe-Direct", true, false)).with("Direct-RoutingKey");
         admin.declareBinding(direct);
+
+        /**
+         * FANOUT
+         *
+         * 发布订阅模式(不存在路由键 将被投放到exchange对应的队列中)
+         */
+        admin.declareQueue(new Queue("Fanout-Queue-1"));
+        admin.declareQueue(new Queue("Fanout-Queue-2"));
+        admin.declareQueue(new Queue("Fanout-Queue-3"));
+
+        admin.declareExchange(new FanoutExchange("Joe-Fanout", false, false));
+
+        Binding fanout1 = BindingBuilder.bind(new Queue("Fanout-Queue-1"))
+                .to(new FanoutExchange("Joe-Fanout", false, false));
+
+        Binding fanout2 = BindingBuilder.bind(new Queue("Fanout-Queue-2"))
+                .to(new FanoutExchange("Joe-Fanout", false, false));
+
+        Binding fanout3 = BindingBuilder.bind(new Queue("Fanout-Queue-3"))
+                .to(new FanoutExchange("Joe-Fanout", false, false));
+
+        admin.declareBinding(fanout1);
+        admin.declareBinding(fanout2);
+        admin.declareBinding(fanout3);
+
+        /**
+         * Topic
+         *
+         * 可以使得不同源头的数据投放到一个队列中(order.log , order.id, purchase.log, purchase.id)
+         *
+         * 通过路由键的命名分类来进行筛选
+         */
+        admin.declareQueue(new Queue("Topic-Queue-1"));
+        admin.declareQueue(new Queue("Topic-Queue-2"));
+        admin.declareQueue(new Queue("Topic-Queue-3"));
+
+        admin.declareExchange(new TopicExchange("Joe-Topic", false, false));
+
+        Binding topic1 = BindingBuilder.bind(new Queue("Topic-Queue-1"))
+                .to(new TopicExchange("Joe-Topic", false, false)).with("*.to");
+
+        Binding topic2 = BindingBuilder.bind(new Queue("Topic-Queue-2"))
+                .to(new TopicExchange("Joe-Topic", false, false)).with("log.*");
+
+        Binding topic3 = BindingBuilder.bind(new Queue("Topic-Queue-3"))
+                .to(new TopicExchange("Joe-Topic", false, false)).with("log1.to");
+
+        admin.declareBinding(topic1);
+        admin.declareBinding(topic2);
+        admin.declareBinding(topic3);
+
         return admin;
     }
 
+    /**
+     * 该对象中配置的ConfirmCallback和ReturnCallback均针对的是消息发送这个阶段
+     * ConfirmCallback在到达交换机前这个阶段起作用
+     * ReturnCallback在交换机到队列这个阶段起作用
+     *
+     * 发送消息的确认机制原则::
+     *  (1)如果消息没有到exchange,则confirm回调,ack=false
+     *  (2)如果消息到达exchange,则confirm回调,ack=true
+     *  (3)exchange到queue成功,则不回调return
+     *  (4)exchange到queue失败,则回调return(需设置mandatory=true,否则不回回调,消息就丢了)
+     *
+     * @return RabbitTemplate
+     */
     @Bean
     @Scope(ConfigurableBeanFactory.SCOPE_PROTOTYPE)
     public RabbitTemplate rabbitTemplate() {
@@ -110,7 +179,7 @@ public class RabbitMqConfig {
         template.setConfirmCallback(new RabbitTemplate.ConfirmCallback() {
             @Override
             public void confirm(CorrelationData correlationData, boolean b, String s) {
-                System.out.println("消息确认 ===== ack,是否确认 : " + b + ", 错误原因 : " + s);
+                System.out.println("消息确认 ===== ack,是否确认 : " + b + ", 错误原因 : " + s );
                 if (correlationData != null) {
                     System.out.println("correlationData : " + correlationData.toString());
                 }
