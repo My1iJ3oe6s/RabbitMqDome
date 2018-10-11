@@ -9,7 +9,7 @@
         <module name="RabbitMq-Dome" />
       </profile>
     </annotationProcessing>
-    <bytecodeTargetLevel>
+    <bytecodeTargetLevel target="1.8">
       <module name="RabbitMq-Dome" target="1.6" />
     </bytecodeTargetLevel>
   </component>

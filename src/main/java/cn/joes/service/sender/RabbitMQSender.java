@@ -32,7 +32,7 @@ public class RabbitMQSender {
     @Autowired
     private RabbitTemplate template;
 
-    public void send() throws IOException, TimeoutException {
+    public void send() throws Exception {
 
         System.out.println("##### 开始发送消息....");
 
@@ -48,13 +48,17 @@ public class RabbitMQSender {
         template.convertAndSend
                 ("Joe-Topic", "log1.to", "send topic message to Joe-Topic(Topic) with log1.to(routing-key)..");
 
+        //Thread.sleep(5000);
 
-        //如何发送延迟消息
+        System.out.println("##### send message to topic : ");
+        template.convertAndSend
+                ("Joe-Topic", "log1.to", "send topic message to Joe-Topic(Topic) with log1.to(routing-key)..");
 
-        //如何接收消息的时候时自动的
-
-        //消费者的确认
-
-        //
+        System.out.println("##### send message to direct with ttl time : ");
+        MessageProperties messageProperties = new MessageProperties();
+        messageProperties.setExpiration("13000");
+        Message message = new Message("send message to Direct with TTL with dead".getBytes(), messageProperties);
+        template.send("TTL-Direct", "Direct-TTL", message, null
+        );
     }
 }

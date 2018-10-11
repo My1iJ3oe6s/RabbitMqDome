@@ -21,14 +21,13 @@ import java.util.concurrent.TimeoutException;
 @Component
 public class RabbitMQReceive {
 
-    @RabbitListener(containerFactory = "myRabbitListenerContainerFactory", queues = "Direct-Queue", group = "group", id = "id")
+    //@RabbitListener(containerFactory = "myRabbitListenerContainerFactory", queues = "Direct-Queue", group = "group", id = "id")
     //监听器监听指定的Queue
-    @RabbitHandler
     public void reveive(String str) {
         System.out.println("Direct Receive:  " + str);
     }
 
-    @RabbitListener(queues = "Topic-Queue-1", exclusive = true)
+    @RabbitListener(queues = "Topic-Queue-3", exclusive = true)
     //监听器监听指定的Queue
     public void topicReceive(String str) {
         System.out.println("Topic Receive:  " + str);

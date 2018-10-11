@@ -1,6 +1,7 @@
 package cn.joes.config;
 
 import com.rabbitmq.client.Channel;
+import org.springframework.amqp.AmqpException;
 import org.springframework.amqp.core.*;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.amqp.rabbit.config.SimpleRabbitListenerContainerFactory;
@@ -14,6 +15,7 @@ import org.springframework.amqp.rabbit.listener.RabbitListenerContainerFactory;
 import org.springframework.amqp.rabbit.listener.RabbitListenerEndpoint;
 import org.springframework.amqp.rabbit.listener.SimpleMessageListenerContainer;
 import org.springframework.amqp.rabbit.support.CorrelationData;
+import org.springframework.amqp.support.ConsumerTagStrategy;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.beans.factory.config.ConfigurableBeanFactory;
 import org.springframework.boot.autoconfigure.amqp.RabbitProperties;
@@ -21,6 +23,9 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.PropertySource;
 import org.springframework.context.annotation.Scope;
+
+import java.util.HashMap;
+import java.util.Map;
 
 /**
  *
@@ -94,13 +99,39 @@ public class RabbitMqConfig {
          * direct : 通过路由键 消息将被投送到对应的队列(一对一)
          */
         admin.declareQueue(new Queue("Direct-Queue"));
-
         //该交换机里面的三个参数分别为: 名字,持久化,是否自动删除
-        admin.declareExchange(new DirectExchange("Joe-Direct", false, false));
+        //在声明交换机的时候若创建的name已经存在会导致创建RabbitAdmin失败
+        admin.declareExchange(new DirectExchange("Joe-Direct", true, false));
 
         Binding direct = BindingBuilder.bind(new Queue("Direct-Queue"))
                 .to(new DirectExchange("Joe-Direct", true, false)).with("Direct-RoutingKey");
         admin.declareBinding(direct);
+
+        //设置包含过期时间的队列
+        Map<String, Object> queueProperties = new HashMap<String, Object>();
+        queueProperties.put("x-message-ttl", 10000);
+        //设置队列最大的消息数量
+        queueProperties.put("x-max-length", 5);
+        // 设置队列可存放消息内容的最大字节长度为20
+        queueProperties.put("x-max-length-bytes", 1000);
+        //设置死信队列 Dead Letter Exchange(消息过期或者失败都会发送到那边)
+        queueProperties.put("x-dead-letter-exchange","TTL-Direct1");
+        queueProperties.put("x-dead-letter-routing-key","TTL-Direct-failure");
+
+        Queue addFailureQueue = new Queue("TTL-Queue", true, false, false, queueProperties);
+        admin.declareQueue(addFailureQueue);
+        admin.declareExchange(new DirectExchange("TTL-Direct", true, false));
+        Binding directTTL = BindingBuilder.bind(addFailureQueue)
+                .to(new DirectExchange("TTL-Direct", true, false)).with("Direct-TTL");
+        admin.declareBinding(directTTL);
+
+        //死信队列
+        Queue failureQueue = new Queue("TTL-Failure-Queue");
+        admin.declareQueue(failureQueue);
+        admin.declareExchange(new DirectExchange("TTL-Direct1", true, false));
+        Binding directTTL1 = BindingBuilder.bind(failureQueue)
+                .to(new DirectExchange("TTL-Direct1", true, false)).with("TTL-Direct-failure");
+        admin.declareBinding(directTTL1);
 
         /**
          * FANOUT
@@ -111,7 +142,7 @@ public class RabbitMqConfig {
         admin.declareQueue(new Queue("Fanout-Queue-2"));
         admin.declareQueue(new Queue("Fanout-Queue-3"));
 
-        admin.declareExchange(new FanoutExchange("Joe-Fanout", false, false));
+        admin.declareExchange(new FanoutExchange("Joe-Fanout", true, false));
 
         Binding fanout1 = BindingBuilder.bind(new Queue("Fanout-Queue-1"))
                 .to(new FanoutExchange("Joe-Fanout", false, false));
@@ -173,7 +204,7 @@ public class RabbitMqConfig {
     public RabbitTemplate rabbitTemplate() {
         RabbitTemplate template = new RabbitTemplate(connectionFactory());
 
-        //需设置mandatory=true,否则不回回调,消息就丢了
+        //需设置mandatory=true,否则不回回调,消息就丢了(针对的是return这个环节(即交换机到队列))
         template.setMandatory(true);
 
         template.setConfirmCallback(new RabbitTemplate.ConfirmCallback() {
@@ -199,57 +230,69 @@ public class RabbitMqConfig {
         return template;
     }
 
+    int count=0;
+
     /**
-     * 消费者的工厂类
+     * 消费方式一:使用容器的方式进行消费(相当于线程池,有消息的时候创建对应的消费者对象来处理)
+     * 认识一个接口org.springframework.amqp.rabbit.listener.MessageListenerContainer，
+     * 其默认实现类org.springframework.amqp.rabbit.listener.SimpleMessageListenerContainer。
      *
      * @return
      */
-    @Bean(value = "myRabbitListenerContainerFactory")
-    public RabbitListenerContainerFactory<?> rabbitListenerContainerFactory() {
-        SimpleRabbitListenerContainerFactory factory = new SimpleRabbitListenerContainerFactory();
-        factory.setConnectionFactory(connectionFactory());
-        /**开启手动 ack */
-        factory.setAcknowledgeMode(AcknowledgeMode.MANUAL);
-        RabbitListenerEndpoint endpoint = new RabbitListenerEndpoint() {
-            @Override
-            public String getId() {
-                return "id";
-            }
+    @Bean(value = "myRabbitListenerContainer")
+    public SimpleMessageListenerContainer simpleMessageListenerContainer(ConnectionFactory connectionFactory) {
+        SimpleMessageListenerContainer container = new SimpleMessageListenerContainer();
+        container.setConnectionFactory(connectionFactory);
 
-            @Override
-            public String getGroup() {
-                return "group";
-            }
+        //设置并发消费者的数量(MessageConsumer)
+        container.setConcurrentConsumers(5);
+        container.setMaxConcurrentConsumers(10);
 
+        //设置消费的队列 , 队列可以是多个(参数是String的数组)
+        container.setQueueNames("Topic-Queue-1", "Direct-Queue", "TTL-Failure-Queue");
+        /**
+         * SimpleMessageListenerContainer的生命周期随着spring容器的启动而启动,关闭而关闭
+         * 这里设置spring容器初始化的时候设置SimpleMessageListenerContainer不启动
+         */
+        //container.setAutoStartup(false);
+
+        //设置消费者的consumerTag_tag
+        ConsumerTagStrategy consumerTagStrategy = new ConsumerTagStrategy() {
             @Override
-            public void setupListenerContainer(MessageListenerContainer messageListenerContainer) {
-                messageListenerContainer.setupMessageListener(new ChannelAwareMessageListener() {
-                    @Override
-                    public void onMessage(Message message, Channel channel) throws Exception {
-                        System.out.println("接收到的消息 message : " + message);
-                        channel.basicReject(message.getMessageProperties().getDeliveryTag(), false);
-                        System.out.println("拒绝消息");
-                    }
-                });
+            public String createConsumerTag(String s) {
+                return "newTag-" + s + "-" + (++count);
             }
         };
-        factory.createListenerContainer(endpoint);
-        return factory;
-    }
+        container.setConsumerTagStrategy(consumerTagStrategy);
 
-    /*@Bean(value = "myRabbitListenerContainer")
-    public SimpleMessageListenerContainer simpleMessageListenerContainer() {
-        SimpleMessageListenerContainer container = new SimpleMessageListenerContainer(connectionFactory());
+
+        //设置消费者的Arguments
+        Map<String, Object> args = new HashMap<String, Object>();
+        args.put("module","订单模块");
+        args.put("fun","发送消息");
+        container.setConsumerArguments(args);
+
         container.setMessageListener(new ChannelAwareMessageListener() {
             @Override
+            //得到channel,可以对消息进行操作
             public void onMessage(Message message, Channel channel) throws Exception {
-                System.out.println("接收到的消息 message : " + message);
-                channel.basicReject(message.getMessageProperties().getDeliveryTag(), false);
-                System.out.println("拒绝消息");
+                System.out.println("消费方式一: 接收到的消息 message : " + message);
+
+                //channel.basicReject(message.getMessageProperties().getDeliveryTag(), false);
             }
         });
+
+        //后置处理器，接收到的消息都添加了Header请求头
+        container.setAfterReceivePostProcessors(new MessagePostProcessor() {
+            @Override
+            public Message postProcessMessage(Message message) throws AmqpException {
+                message.getMessageProperties().getHeaders().put("desc",10);
+                return message;
+            }
+        });
+
         return container;
-    }*/
+    }
 
 
 
