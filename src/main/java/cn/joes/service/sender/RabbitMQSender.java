@@ -38,7 +38,11 @@ public class RabbitMQSender {
 
         System.out.println("##### send message to Direct : ");
         template.convertAndSend
-                ("Joe-Direct", "Direct-RoutingKey", "send message to Joe-Direct(Direct) with Direct-RoutingKey(routingkey)..");
+                ("Joe-Direct", "Direct-RoutingKey", "send message to Joe-Direct(Direct) 1");
+
+        template.convertAndSend
+                ("Joe-Direct", "Direct-RoutingKey", "send message to Joe-Direct(Direct) 2");
+
 
         System.out.println("##### send message to Fanout : ");
         template.convertAndSend

@@ -2,28 +2,22 @@ package cn.joes.config;
 
 import com.rabbitmq.client.Channel;
 import org.springframework.amqp.AmqpException;
+import org.springframework.amqp.ImmediateAcknowledgeAmqpException;
 import org.springframework.amqp.core.*;
-import org.springframework.amqp.rabbit.annotation.RabbitListener;
-import org.springframework.amqp.rabbit.config.SimpleRabbitListenerContainerFactory;
 import org.springframework.amqp.rabbit.connection.CachingConnectionFactory;
 import org.springframework.amqp.rabbit.connection.ConnectionFactory;
 import org.springframework.amqp.rabbit.core.ChannelAwareMessageListener;
 import org.springframework.amqp.rabbit.core.RabbitAdmin;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
-import org.springframework.amqp.rabbit.listener.MessageListenerContainer;
-import org.springframework.amqp.rabbit.listener.RabbitListenerContainerFactory;
-import org.springframework.amqp.rabbit.listener.RabbitListenerEndpoint;
 import org.springframework.amqp.rabbit.listener.SimpleMessageListenerContainer;
 import org.springframework.amqp.rabbit.support.CorrelationData;
 import org.springframework.amqp.support.ConsumerTagStrategy;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.beans.factory.config.ConfigurableBeanFactory;
-import org.springframework.boot.autoconfigure.amqp.RabbitProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.PropertySource;
 import org.springframework.context.annotation.Scope;
-
 import java.util.HashMap;
 import java.util.Map;
 
@@ -91,6 +85,9 @@ public class RabbitMqConfig {
     RabbitAdmin rabbitAdmin(ConnectionFactory connectionFactory) {
         RabbitAdmin admin = new RabbitAdmin(connectionFactory);
 
+        //设置忽略申明异常(避免创建重复队列以及创建异常的时候启动异常)
+        admin.setIgnoreDeclarationExceptions(true);
+
         //创建队列和交换机以及绑定
 
         /**
@@ -98,7 +95,11 @@ public class RabbitMqConfig {
          *
          * direct : 通过路由键 消息将被投送到对应的队列(一对一)
          */
-        admin.declareQueue(new Queue("Direct-Queue"));
+        //设置死信队列 Dead Letter Exchange(消息过期或者失败都会发送到那边)
+        Map<String, Object> queueProperties1 = new HashMap<String, Object>();
+        queueProperties1.put("x-dead-letter-exchange","TTL-Direct1");
+        queueProperties1.put("x-dead-letter-routing-key","TTL-Direct-failure");
+        admin.declareQueue(new Queue("Direct-Queue", true, false, false, queueProperties1));
         //该交换机里面的三个参数分别为: 名字,持久化,是否自动删除
         //在声明交换机的时候若创建的name已经存在会导致创建RabbitAdmin失败
         admin.declareExchange(new DirectExchange("Joe-Direct", true, false));
@@ -249,7 +250,8 @@ public class RabbitMqConfig {
         container.setMaxConcurrentConsumers(10);
 
         //设置消费的队列 , 队列可以是多个(参数是String的数组)
-        container.setQueueNames("Topic-Queue-1", "Direct-Queue", "TTL-Failure-Queue");
+        container.setQueueNames("Direct-Queue", "TTL-Failure-Queue");
+
         /**
          * SimpleMessageListenerContainer的生命周期随着spring容器的启动而启动,关闭而关闭
          * 这里设置spring容器初始化的时候设置SimpleMessageListenerContainer不启动
@@ -272,13 +274,35 @@ public class RabbitMqConfig {
         args.put("fun","发送消息");
         container.setConsumerArguments(args);
 
+        //自动确认
+        //container.setAcknowledgeMode(AcknowledgeMode.AUTO);
+
+        //手动确认
+        container.setAcknowledgeMode(AcknowledgeMode.MANUAL);
+
         container.setMessageListener(new ChannelAwareMessageListener() {
             @Override
             //得到channel,可以对消息进行操作
             public void onMessage(Message message, Channel channel) throws Exception {
                 System.out.println("消费方式一: 接收到的消息 message : " + message);
 
-                //channel.basicReject(message.getMessageProperties().getDeliveryTag(), false);
+                //消费确认(拒绝)
+                channel.basicReject(message.getMessageProperties().getDeliveryTag(), false);
+                //channel.basicAck(message.getMessageProperties().getDeliveryTag(), true);
+
+                //公平分发
+                channel.basicQos(1);
+
+                /**
+                 * 当AcknowledgeMode=AUTO时出现异常通过这种方式抛出(不同的异常对应不同的情况(是否重新加入队列))
+                 *
+                 * 抛出NullPointerException异常则重新入队列
+                 * throw new NullPointerException("消息消费失败");
+                 * 当抛出的异常是AmqpRejectAndDontRequeueException异常的时候，则消息会被拒绝，且requeue=false
+                 * throw new AmqpRejectAndDontRequeueException("消息消费失败");
+                 * 当抛出ImmediateAcknowledgeAmqpException异常，则消费者会被确认
+                 * throw new ImmediateAcknowledgeAmqpException("消息消费失败");
+                 */
             }
         });
 
@@ -290,10 +314,7 @@ public class RabbitMqConfig {
                 return message;
             }
         });
-
         return container;
     }
-
-
 
 }
